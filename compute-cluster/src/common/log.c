@@ -4,9 +4,9 @@
 #include <time.h>
 #include "common/log.h"
 
-static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void log_line(const char *tag, const char *fmt, ...) {
+void log_line(char *tag, char *fmt, ...){
     char ts[16];
     time_t now = time(NULL);
     struct tm tm;

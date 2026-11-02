@@ -1,102 +1,111 @@
-/* CONTRACT FILE: the wire protocol.
+/* CONTRACT FILE: the wire protocol, Milestone 1 subset.
  *
  * Framing: [MsgHeader][payload of header.length bytes]. All integers are in
- * HOST byte order (every lab machine is little-endian x86/ARM; never mix).
- * Structs are packed, fixed-width, NUL-terminated char arrays.
+ * HOST byte order (every lab machine is little-endian x86/ARM; never mix in htonl).
+ * Structs use fixed-width types and NUL-terminated char arrays, and follow the
+ * "message struct rule" in types.h (only uint32_t/int32_t and char arrays, so no padding).
  * "(+bytes)" means the fixed struct is followed by raw bytes in the same payload.
  *
- * Order the scheduler sends when it starts a job on a worker:
- *   1. MSG_CHECKPOINT      (only if the job has a saved checkpoint)
- *   2. MSG_FILE_DATA or MSG_FILE_ALREADY_CACHED   (skipped for PATH commands)
- *   3. MSG_JOB_ASSIGN      (last; this is what makes the worker start the job)
- */
+ * Starting a job in Milestone 1: the scheduler sends ONE message, MSG_JOB_ASSIGN,
+ * for a PATH command (e.g. "ls"). No checkpoint and no file transfer yet.
+ *
+ * Message numbers are KEPT IDENTICAL to the full contract, so the gaps below are
+ * the messages of later milestones. When you add one, give it the number that is
+ * reserved for it here (never reuse a number for something else). */
 #ifndef COMMON_PROTOCOL_H
 #define COMMON_PROTOCOL_H
 
 #include "common/types.h"
 
-typedef struct WIRE { uint32_t type; uint32_t length; } MsgHeader;
-#define MAX_PAYLOAD (256u * 1024u * 1024u)
+typedef struct { uint32_t type; uint32_t length; } MsgHeader;
+#define MAX_PAYLOAD (256u * 1024u * 1024u)    /* recv_msg rejects anything bigger */
 
 typedef enum {
     /* worker <-> scheduler */
-    MSG_REGISTER = 1,       /* worker -> sched : RegisterMsg */
-    MSG_REGISTER_ACK,       /* sched -> worker : RegisterAck */
-    MSG_HEARTBEAT,          /* worker -> sched : HeartbeatMsg (+JobTelemetry[n]) */
-    MSG_JOB_ASSIGN,         /* sched -> worker : JobAssignMsg */
-    MSG_JOB_UPDATE,         /* worker -> sched : JobUpdateMsg (RUNNING/COMPLETED/FAILED + reason) */
-    MSG_JOB_OUTPUT,         /* worker -> sched : JobOutputMsg (+bytes) */
-    MSG_CHECKPOINT,         /* both ways       : CheckpointMsg (+bytes) */
-    MSG_KILL,               /* sched -> worker : KillMsg */
-    MSG_DRAIN,              /* worker -> sched : DrainMsg ("I am draining") */
-    MSG_CACHE_REPORT,       /* worker -> sched : CacheReportMsg (+hashes) */
-    MSG_FILE_DATA,          /* sched -> worker : FileDataMsg (+file bytes) */
-    MSG_FILE_ALREADY_CACHED,/* sched -> worker : FileRefMsg */
-    MSG_FILE_MISSING,       /* worker -> sched : FileRefMsg (cache file vanished) */
+    MSG_REGISTER     = 1,    /* worker -> sched : RegisterMsg */
+    MSG_REGISTER_ACK = 2,    /* sched -> worker : RegisterAck (carries the worker id) */
+    MSG_HEARTBEAT    = 3,    /* worker -> sched : HeartbeatMsg */
+    MSG_JOB_ASSIGN   = 4,    /* sched -> worker : JobAssignMsg (this starts the job) */
+    MSG_JOB_UPDATE   = 5,    /* worker -> sched : JobUpdateMsg (RUNNING/COMPLETED/FAILED + reason) */
+    MSG_JOB_OUTPUT   = 6,    /* worker -> sched : JobOutputMsg (+bytes) */
+    /* 7..13 reserved: CHECKPOINT, KILL, DRAIN, CACHE_REPORT, FILE_DATA,
+     *                 FILE_ALREADY_CACHED, FILE_MISSING */
+
     /* client -> scheduler */
-    MSG_CLIENT_LOGIN,       /* ClientLoginMsg (always the first message) */
-    MSG_SUBMIT,             /* JobSpec; answered with MSG_REPLY */
-    MSG_NODES_REQ,          /* no payload; answered with MSG_REPLY_TEXT */
-    MSG_STATUS_REQ,         /* IdReq; answered with MSG_REPLY_TEXT */
-    MSG_LOGS_REQ,           /* LogsReq; answered with MSG_LOGS_DATA... MSG_LOGS_END */
-    MSG_CANCEL_REQ,         /* IdReq; answered with MSG_REPLY */
-    MSG_MIGRATE_REQ,        /* IdReq; answered with MSG_REPLY */
-    MSG_CRON_LIST_REQ,      /* no payload; answered with MSG_REPLY_TEXT */
-    MSG_CANCEL_CRON_REQ,    /* IdReq (template id); answered with MSG_REPLY */
+    MSG_CLIENT_LOGIN = 14,   /* ClientLoginMsg (always the first message) */
+    MSG_SUBMIT       = 15,   /* JobSpec; answered with MSG_REPLY */
+    MSG_NODES_REQ    = 16,   /* no payload; answered with MSG_REPLY_TEXT */
+    MSG_STATUS_REQ   = 17,   /* IdReq; answered with MSG_REPLY_TEXT */
+    /* 18..22 reserved: LOGS_REQ, CANCEL_REQ, MIGRATE_REQ, CRON_LIST_REQ, CANCEL_CRON_REQ */
+
     /* scheduler -> client */
-    MSG_REPLY,              /* ReplyMsg */
-    MSG_REPLY_TEXT,         /* raw text bytes, client prints as is */
-    MSG_EVENT,              /* raw text bytes: one "[Event] ..." line (no newline) */
-    MSG_LOGS_DATA,          /* raw output bytes */
-    MSG_LOGS_END,           /* IdReq (job id): follow finished */
-    MSG_TYPE_COUNT
+    MSG_REPLY        = 23,   /* ReplyMsg */
+    MSG_REPLY_TEXT   = 24,   /* raw text bytes, client prints as is */
+    MSG_EVENT        = 25,   /* raw text bytes: one "[Event] ..." line (no newline) */
+    /* 26..27 reserved: LOGS_DATA, LOGS_END */
+
+    MSG_TYPE_COUNT   = 28
 } MsgType;
 
 /* ---------------- payloads ---------------- */
-typedef struct WIRE { uint32_t cores, ram_mb, gpus; } RegisterMsg;
-typedef struct WIRE { uint32_t worker_id; } RegisterAck;
+typedef struct{
+    uint32_t cores; 
+    uint32_t ram_mb;
+    uint32_t  gpus;
+}RegisterMsg;
 
-typedef struct WIRE {
-    uint32_t worker_id, cpu_load_pct, running_jobs, n_telemetry;
-} HeartbeatMsg;                                   /* +JobTelemetry[n_telemetry] */
 
-#define ASSIGN_PATH_COMMAND  1u   /* run by name found in PATH; no file transfer */
-#define ASSIGN_HAS_CHECKPOINT 2u
-typedef struct WIRE {
-    uint32_t job_id, cores, ram_mb, time_sec, gpus, attempt, flags;
-    char     hash[HASH_HEX_LEN + 1];
-    char     name[MAX_PATH_LEN];                  /* file name or command name */
-} JobAssignMsg;
+typedef struct{
+    uint32_t worker_id; 
+}RegisterAck;
 
-typedef struct WIRE {
-    uint32_t job_id, worker_id, new_state;        /* JobState */
-    uint64_t peak_ram_kb;
-    char     reason[MAX_REASON];                  /* human text; "" if none */
-} JobUpdateMsg;
+/* n_telemetry is always 0 in Milestone 1 (live telemetry arrives in Milestone 2). */
+typedef struct{
+    uint32_t worker_id;
+    uint32_t cpu_load_pct;
+    uint32_t running_jobs;
+    uint32_t n_telemetry;
+}HeartbeatMsg;
 
-typedef struct WIRE { uint32_t job_id, len; } JobOutputMsg;       /* +bytes */
-typedef struct WIRE { uint32_t job_id, number, len; } CheckpointMsg; /* +bytes */
+#define ASSIGN_PATH_COMMAND 1u   /* run by name found in PATH; no file transfer */
+typedef struct{
+    uint32_t job_id;
+    uint32_t cores;
+    uint32_t ram_mb;
+    uint32_t time_sec;
+    uint32_t gpus;
+    uint32_t flags;
+    char name[MAX_PATH_LEN];                 /* command name (PATH command) */
+}JobAssignMsg;
 
-#define KILL_CANCEL  1u   /* SIGKILL, report "cancelled" */
-#define KILL_PREEMPT 2u   /* SIGKILL, report "preempted" */
-#define KILL_MIGRATE 3u   /* SIGTERM, SIGKILL after MIGRATE_KILL_GRACE_SEC */
-typedef struct WIRE { uint32_t job_id, reason; } KillMsg;
+typedef struct{
+    uint32_t job_id;
+    uint32_t worker_id;
+    uint32_t new_state;       /* new_state is a JobState */
+    char reason[MAX_REASON];                 /* human text; "" if none */
+}JobUpdateMsg;
 
-typedef struct WIRE { uint32_t worker_id; } DrainMsg;
-typedef struct WIRE { uint32_t n; } CacheReportMsg;               /* +n*(HASH_HEX_LEN+1) */
-typedef struct WIRE {
-    uint32_t job_id; char hash[HASH_HEX_LEN + 1];
-    char name[MAX_PATH_LEN]; uint64_t len;
-} FileDataMsg;                                                    /* +file bytes */
-typedef struct WIRE { uint32_t job_id; char hash[HASH_HEX_LEN + 1]; } FileRefMsg;
+typedef struct{
+    uint32_t job_id;
+    uint32_t len; 
+}JobOutputMsg;   /* +len bytes of output */
 
-typedef struct WIRE { char username[MAX_USERNAME + 1]; } ClientLoginMsg;
-typedef struct WIRE { uint32_t id; } IdReq;
-typedef struct WIRE { uint32_t job_id, follow; } LogsReq;
+typedef struct{
+    char username[MAX_USERNAME + 1]; 
+}ClientLoginMsg;
 
-#define REPLY_OK 0
+typedef struct{
+    uint32_t id; 
+}IdReq;                   /* status <job_id> */
+
+#define REPLY_OK         0
 #define REPLY_QUEUE_FULL 1
-#define REPLY_ERROR 2
-typedef struct WIRE { int32_t code; uint32_t id; char text[MAX_REASON]; } ReplyMsg;
+#define REPLY_ERROR      2
+
+typedef struct{
+    int32_t code; 
+    uint32_t id; 
+    char text[MAX_REASON]; 
+}ReplyMsg;
 
 #endif
