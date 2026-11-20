@@ -6,6 +6,7 @@
 #include "worker/capacity.h"
 #include "worker/config.h"
 #include "worker/connect.h"
+#include "worker/loop.h"
 
 int main(int argc, char **argv){
     WorkerConfig cfg;
@@ -34,7 +35,9 @@ int main(int argc, char **argv){
     log_line(tag, "Registered successfully. ID: %u. Capacity: %d Cores, %dMB RAM, %d GPUs.",
              worker_id, cfg.cores, cfg.ram_mb, cfg.gpus);
 
-    // TEMPORARY: replaced by the heartbeat and main loop in the next sections
+    run_loop(sock, worker_id, tag);
+
+    // TEMPORARY: a later section kills running jobs and registers again as a new worker
     close(sock);
-    return 0;
+    return 1;
 }
