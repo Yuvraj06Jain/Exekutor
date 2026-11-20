@@ -4,6 +4,7 @@
 #include "common/log.h"
 #include "worker/config.h"
 #include "worker/capacity.h"
+#include "worker/connect.h"
 
 int main(int argc, char **argv){
     WorkerConfig cfg;
@@ -16,9 +17,13 @@ int main(int argc, char **argv){
 
     clamp_capacity(&cfg); // never advertise more than the machine really has
 
-    // TEMPORARY: replaced in the next section (clamping, discovery, registration)
-    log_line("WORKER", "Parsed: cores=%d ram=%dMB gpus=%d discovery-port=%d fallback=%s:%d",
-             cfg.cores, cfg.ram_mb, cfg.gpus, cfg.discovery_port,
-             cfg.has_fallback ? cfg.fallback_ip : "none", cfg.fallback_port);
+    int sock = connect_to_scheduler(&cfg);
+    if(sock < 0)
+        return 1;
+
+    // TEMPORARY: replaced in the next section (registration)
+    log_line("WORKER", "Connected to scheduler.");
+    close(sock);
+
     return 0;
 }
