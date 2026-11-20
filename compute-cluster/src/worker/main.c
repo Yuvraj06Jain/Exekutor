@@ -1,9 +1,10 @@
 #include <signal.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "common/log.h"
-#include "worker/config.h"
 #include "worker/capacity.h"
+#include "worker/config.h"
 #include "worker/connect.h"
 
 int main(int argc, char **argv){
@@ -21,9 +22,19 @@ int main(int argc, char **argv){
     if(sock < 0)
         return 1;
 
-    // TEMPORARY: replaced in the next section (registration)
-    log_line("WORKER", "Connected to scheduler.");
-    close(sock);
+    uint32_t worker_id;
+    if(register_with_scheduler(sock, &cfg, &worker_id) < 0){
+        close(sock);
+        return 1;
+    }
 
+    // From now on every log line carries our ID: "WORKER 1001"
+    char tag[32];
+    snprintf(tag, sizeof tag, "WORKER %u", worker_id);
+    log_line(tag, "Registered successfully. ID: %u. Capacity: %d Cores, %dMB RAM, %d GPUs.",
+             worker_id, cfg.cores, cfg.ram_mb, cfg.gpus);
+
+    // TEMPORARY: replaced by the heartbeat and main loop in the next sections
+    close(sock);
     return 0;
 }
