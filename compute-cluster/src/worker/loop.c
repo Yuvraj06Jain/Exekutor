@@ -7,6 +7,7 @@
 #include "common/net.h"
 #include "common/protocol.h"
 #include "common/types.h"
+#include "worker/job.h"
 #include "worker/loop.h"
 
 #define LOOP_TICK_MS 100 // the loop wakes up this often even when nothing arrives
@@ -21,18 +22,17 @@ static int send_heartbeat(int sock, uint32_t worker_id){
     HeartbeatMsg hb;
     hb.worker_id = worker_id;
     hb.cpu_load_pct = 0; // placeholder: real CPU load comes in Section 4D (later)
-    hb.running_jobs = 0; // placeholder until the worker tracks running jobs
+    hb.running_jobs = jobs_running();
     return send_msg(sock, MSG_HEARTBEAT, &hb, sizeof hb);
 }
 
-static void handle_message(char *tag, MsgHeader *h, void *payload){
-    if(h->type == MSG_JOB_ASSIGN && h->length == sizeof(JobAssignMsg)){
-        JobAssignMsg *job = payload;
-        // TEMPORARY: the next sections fork and sandbox the job here
-        log_line(tag, "Job %u ASSIGNED, forking...", job->job_id);
-    }
-    else
-        log_line(tag, "Ignoring message type %u (length %u)", h->type, h->length);
+// Returns -1 only if the scheduler connection broke while replying.
+static int handle_message(int sock, uint32_t worker_id, char *tag, MsgHeader *h, void *payload){
+    if(h->type == MSG_JOB_ASSIGN && h->length == sizeof(JobAssignMsg))
+        return job_start(sock, worker_id, tag, payload);
+
+    log_line(tag, "Ignoring message type %u (length %u)", h->type, h->length);
+    return 0;
 }
 
 // ASSUMPTION: one poll() loop instead of threads, so only one place ever writes to
@@ -60,8 +60,17 @@ void run_loop(int sock, uint32_t worker_id, char *tag){
                 log_line(tag, "Lost connection to the scheduler.");
                 return;
             }
-            handle_message(tag, &h, payload);
+            int rc = handle_message(sock, worker_id, tag, &h, payload);
             free(payload);
+            if(rc < 0){
+                log_line(tag, "Lost connection to the scheduler.");
+                return;
+            }
+        }
+
+        if(jobs_reap(sock, worker_id, tag) < 0){ // report jobs that finished since the last tick
+            log_line(tag, "Lost connection to the scheduler.");
+            return;
         }
 
         if(now_ms() >= next_heartbeat){
